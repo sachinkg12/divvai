@@ -1,0 +1,107 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: us-central1
+  API_SERVICE: divvai-api
+  WEB_SERVICE: divvai-web
+
+jobs:
+  deploy-api:
+    name: Deploy API
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker
+
+      - name: Build and push API image
+        run: |
+          gcloud builds submit \
+            --tag gcr.io/$PROJECT_ID/$API_SERVICE:$GITHUB_SHA \
+            --tag gcr.io/$PROJECT_ID/$API_SERVICE:latest \
+            --substitutions=_SERVICE=$API_SERVICE \
+            apps/api
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy $API_SERVICE \
+            --image gcr.io/$PROJECT_ID/$API_SERVICE:$GITHUB_SHA \
+            --platform managed \
+            --region $REGION \
+            --allow-unauthenticated \
+            --set-env-vars="DATABASE_URL=$$DATABASE_URL" \
+            --set-secrets="DATABASE_URL=DATABASE_URL:latest,FIREBASE_PROJECT_ID=FIREBASE_PROJECT_ID:latest" \
+            --memory=512Mi \
+            --cpu=1 \
+            --min-instances=0 \
+            --max-instances=10 \
+            --timeout=300
+
+  deploy-web:
+    name: Deploy Web
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker
+
+      - name: Build and push Web image
+        run: |
+          gcloud builds submit \
+            --tag gcr.io/$PROJECT_ID/$WEB_SERVICE:$GITHUB_SHA \
+            --tag gcr.io/$PROJECT_ID/$WEB_SERVICE:latest \
+            --substitutions=_SERVICE=$WEB_SERVICE \
+            apps/web
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy $WEB_SERVICE \
+            --image gcr.io/$PROJECT_ID/$WEB_SERVICE:$GITHUB_SHA \
+            --platform managed \
+            --region $REGION \
+            --allow-unauthenticated \
+            --set-env-vars="NEXT_PUBLIC_API_URL=https://$API_SERVICE-$REGION-$PROJECT_ID.a.run.app" \
+            --set-secrets="NEXT_PUBLIC_FIREBASE_API_KEY=FIREBASE_API_KEY:latest,NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=FIREBASE_AUTH_DOMAIN:latest,NEXT_PUBLIC_FIREBASE_PROJECT_ID=FIREBASE_PROJECT_ID:latest" \
+            --memory=512Mi \
+            --cpu=1 \
+            --min-instances=0 \
+            --max-instances=10 \
+            --timeout=300
+
